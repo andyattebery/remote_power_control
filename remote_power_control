@@ -91,6 +91,12 @@ wake_on_lan() {
     /usr/bin/wakeonlan $mac_address
 }
 
+post_power_on_sleep() {
+    if [ -z "$REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_PARAMETER" ]; then
+        sleep "$REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_PARAMETER"
+    fi
+}
+
 if [ -e $ENV_FILE_PATH ]; then
     . $ENV_FILE_PATH
 fi
