@@ -35,8 +35,8 @@ homeassistant_switch() {
     homeassistant_url=${3:-${REMOTE_POWER_CONTROL_HOMEASSISTANT_URL}}
     homeassistant_access_token=${4:-${REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN}}
 
-    validate=${homeassistant_url:?"<homeassistant_url> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_URL is not set"}
-    validate=${homeassistant_access_token:?"<homeassistant_access_token> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN is not set"}
+    : ${homeassistant_url:?"<homeassistant_url> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_URL is not set"}
+    : ${homeassistant_access_token:?"<homeassistant_access_token> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN is not set"}
 
     # echo $action
     # echo $homeassistant_switch_entity_id
@@ -71,9 +71,9 @@ pikvm_atx() {
     pikvm_username=${3:-${REMOTE_POWER_CONTROL_PIKVM_USERNAME}}
     pikvm_password=${4:-${REMOTE_POWER_CONTROL_PIKVM_PASSWORD}}
 
-    validate=${pikvm_url:?"<pikvm_url> parameter or REMOTE_POWER_CONTROL_PIKVM_URL is not set"}
-    validate=${pikvm_username:?"<pikvm_username> parameter or REMOTE_POWER_CONTROL_PIKVM_USERNAME is not set"}
-    validate=${pikvm_password:?"<pikvm_password> parameter or REMOTE_POWER_CONTROL_PIKVM_PASSWORD is not set"}
+    : ${pikvm_url:?"<pikvm_url> parameter or REMOTE_POWER_CONTROL_PIKVM_URL is not set"}
+    : ${pikvm_username:?"<pikvm_username> parameter or REMOTE_POWER_CONTROL_PIKVM_USERNAME is not set"}
+    : ${pikvm_password:?"<pikvm_password> parameter or REMOTE_POWER_CONTROL_PIKVM_PASSWORD is not set"}
 
     # echo $action
     # echo $pikvm_url
