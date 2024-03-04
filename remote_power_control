@@ -106,7 +106,7 @@ wake_on_lan() {
 }
 
 post_power_on_sleep() {
-    sleep_in_seconds=${REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_IN_SECONDS:-"2"} # 4 minutes
+    sleep_in_seconds=${REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_IN_SECONDS:-"240"} # 4 minutes
 
     echo "Sleeping for $sleep_in_seconds seconds..."
     sleep "$sleep_in_seconds"
