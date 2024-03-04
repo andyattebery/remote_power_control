@@ -17,6 +17,10 @@ Shell script to remotely power on/off computers
 - `on`
 - `off`
 
+### Post power on sleep
+
+By default, after a power on action, there is a sleep for 4 minutes to wait for the computer to power on. This can be configured by the `REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_IN_SECONDS` environment variable.
+
 ## Type usages
 
 ### homeassistant
@@ -38,3 +42,4 @@ ENV variables (optionally set in /`etc/remote_power_control.env`) can also be se
 - `REMOTE_POWER_CONTROL_PIKVM_PASSWORD`
 - `REMOTE_POWER_CONTROL_HOMEASSISTANT_URL`
 - `REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN`
+- `REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_IN_SECONDS`
