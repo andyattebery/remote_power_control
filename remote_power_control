@@ -8,7 +8,7 @@
 # - Variable null or empty checking: https://stackoverflow.com/a/13864829
 
 # Config
-ENV_FILE_PATH=/etc/remote_power_control.env
+ENV_FILE_PATH=/etc/remote_power_control/env
 
 usage() {
     echo "remote_power_control <type> <...>"
