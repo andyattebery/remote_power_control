@@ -43,7 +43,7 @@ Global flags (parsed before positional args):
 | Type            | Positional args after `<host> <type>`                                                       |
 |-----------------|---------------------------------------------------------------------------------------------|
 | `homeassistant` | `<action> <switch_entity_id> [<homeassistant_url>] [<homeassistant_access_token>]`          |
-| `pikvm`         | `<action> [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]`                              |
+| `pikvm`         | `<action> [<port>] [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]`                     |
 | `wakeonlan`     | `<mac_address>`  *(action implicit `on`)* — or `status`                                     |
 | `ssh`           | `<action> [<ssh_username>] [<ssh_private_key_path>]`                                        |
 
@@ -59,6 +59,11 @@ Global flags (parsed before positional args):
 `status` is type-agnostic in implementation: it pings `<host>` and prints `on`
 or `off`. Type-specific APIs (HA `/api/states/<entity>`, PiKVM `/api/atx`) are
 *not* queried — see "Caveats" below.
+
+For `pikvm`, an empty `<port>` targets the standalone ATX endpoint
+(`/api/atx/power`); a non-empty `<port>` targets the PiKVM Switch endpoint
+(`/api/switch/atx/power?port=<n>`). Auth and action vocabulary are
+identical between the two.
 
 ## Environment variables
 

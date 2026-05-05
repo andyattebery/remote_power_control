@@ -33,7 +33,7 @@ remote_power_control [<flags>] <host> <type> [<action>] [<type-specific args>...
 
 Types and shapes:
     <host> homeassistant <action: on|off|status> <switch_entity_id> [<homeassistant_url (with port, e.g. http://ha.local:8123)>] [<homeassistant_access_token>]
-    <host> pikvm         <action: on|off|status> [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]
+    <host> pikvm         <action: on|off|status> [<port>] [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]
     <host> wakeonlan     <mac_address>
     <host> wakeonlan     status
     <host> ssh           <action: reboot|shutdown|status> [<ssh_username>] [<ssh_private_key_path>]
@@ -172,15 +172,22 @@ homeassistant_switch() {
 
 pikvm_atx() {
     _action=${1:?"<action> not specified"}
-    _url=${2:-${REMOTE_POWER_CONTROL_PIKVM_URL-}}
-    _username=${3:-${REMOTE_POWER_CONTROL_PIKVM_USERNAME-}}
-    _password=${4:-${REMOTE_POWER_CONTROL_PIKVM_PASSWORD-}}
+    _port=${2-}
+    _url=${3:-${REMOTE_POWER_CONTROL_PIKVM_URL-}}
+    _username=${4:-${REMOTE_POWER_CONTROL_PIKVM_USERNAME-}}
+    _password=${5:-${REMOTE_POWER_CONTROL_PIKVM_PASSWORD-}}
 
     : "${_url:?<pikvm_url> parameter or REMOTE_POWER_CONTROL_PIKVM_URL is not set}"
     : "${_username:?<pikvm_username> parameter or REMOTE_POWER_CONTROL_PIKVM_USERNAME is not set}"
     : "${_password:?<pikvm_password> parameter or REMOTE_POWER_CONTROL_PIKVM_PASSWORD is not set}"
 
-    info "Powering $_action via PiKVM ATX..."
+    if [ -n "$_port" ]; then
+        info "Powering $_action via PiKVM Switch (port $_port)..."
+        _endpoint="$_url/api/switch/atx/power?port=$_port&action=$_action"
+    else
+        info "Powering $_action via PiKVM ATX..."
+        _endpoint="$_url/api/atx/power?action=$_action"
+    fi
 
     run_or_print curl \
         --no-progress-meter \
@@ -193,7 +200,7 @@ pikvm_atx() {
         --header "X-KVMD-User: $_username" \
         --header "X-KVMD-Passwd: $_password" \
         --request POST \
-        "$_url/api/atx/power?action=$_action"
+        "$_endpoint"
 }
 
 wake_on_lan() {
@@ -350,18 +357,19 @@ fi
 
 # ---- Dispatch ---------------------------------------------------------------
 
-# $4..$6 are the type-specific positional args after host/type/action.
+# $4..$7 are the type-specific positional args after host/type/action.
 # Default unset positionals to empty under set -u.
 arg4=${4-}
 arg5=${5-}
 arg6=${6-}
+arg7=${7-}
 
 case "$type" in
     homeassistant)
         homeassistant_switch "$action" "$arg4" "$arg5" "$arg6"
         ;;
     pikvm)
-        pikvm_atx "$action" "$arg4" "$arg5" "$arg6"
+        pikvm_atx "$action" "$arg4" "$arg5" "$arg6" "$arg7"
         ;;
     wakeonlan)
         # MAC is at $3 (action was implicit "on")

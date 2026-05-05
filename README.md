@@ -17,7 +17,7 @@ remote_power_control [<flags>] <host> <type> [<action>] [<type-specific args>...
 | Type            | Example |
 |-----------------|---------|
 | `homeassistant` | `remote_power_control my-nas homeassistant on switch.nas_plug` |
-| `pikvm`         | `remote_power_control my-server pikvm on` |
+| `pikvm`         | `remote_power_control my-server pikvm on` *(or with a PiKVM Switch port: `... pikvm on 0`)* |
 | `wakeonlan`     | `remote_power_control my-pc wakeonlan AA:BB:CC:DD:EE:FF` |
 | `ssh`           | `remote_power_control my-server ssh reboot` |
 
