@@ -49,10 +49,11 @@ syslog as fallback) with the host, type, action, exit code, and duration.
 
 ## Configuration
 
-Defaults can be supplied via environment variables, optionally sourced from
-`/etc/remote_power_control/env` (path overridable via `ENV_FILE_PATH`). The
-file should be `chmod 600` since it holds API tokens — the script warns if
-it's world-readable.
+URLs and credentials are supplied via environment variables — set them
+inline (`FOO=bar remote_power_control ...`) or in
+`/etc/remote_power_control/env` (path overridable via `ENV_FILE_PATH`),
+which is sourced if it exists. The file should be `chmod 600` since it
+holds API tokens — the script warns if it's world-readable.
 
 | Variable | Purpose |
 |---|---|

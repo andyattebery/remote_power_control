@@ -40,12 +40,16 @@ Global flags (parsed before positional args):
 
 ## Types and arguments
 
-| Type            | Positional args after `<host> <type>`                                                       |
-|-----------------|---------------------------------------------------------------------------------------------|
-| `homeassistant` | `<action> <switch_entity_id> [<homeassistant_url>] [<homeassistant_access_token>]`          |
-| `pikvm`         | `<action> [<port>] [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]`                     |
-| `wakeonlan`     | `<mac_address>`  *(action implicit `on`)* — or `status`                                     |
-| `ssh`           | `<action> [<ssh_username>] [<ssh_private_key_path>]`                                        |
+| Type            | Positional args after `<host> <type>`                       |
+|-----------------|-------------------------------------------------------------|
+| `homeassistant` | `<action> <switch_entity_id>`                               |
+| `pikvm`         | `<action> [<port>]`                                         |
+| `wakeonlan`     | `<mac_address>`  *(action implicit `on`)* — or `status`     |
+| `ssh`           | `<action>`                                                  |
+
+URLs and credentials come exclusively from environment variables (see
+below). Set them in `$ENV_FILE_PATH` for persistent config or inline
+(`FOO=bar remote_power_control ...`) for one-off overrides.
 
 ## Actions per type
 

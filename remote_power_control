@@ -32,11 +32,14 @@ usage() {
 remote_power_control [<flags>] <host> <type> [<action>] [<type-specific args>...]
 
 Types and shapes:
-    <host> homeassistant <action: on|off|status> <switch_entity_id> [<homeassistant_url (with port, e.g. http://ha.local:8123)>] [<homeassistant_access_token>]
-    <host> pikvm         <action: on|off|status> [<port>] [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]
+    <host> homeassistant <action: on|off|status> <switch_entity_id>
+    <host> pikvm         <action: on|off|status> [<port>]
     <host> wakeonlan     <mac_address>
     <host> wakeonlan     status
-    <host> ssh           <action: reboot|shutdown|status> [<ssh_username>] [<ssh_private_key_path>]
+    <host> ssh           <action: reboot|shutdown|status>
+
+Credentials and URLs come from environment variables (see below) — set
+them in $ENV_FILE_PATH or inline (FOO=bar remote_power_control ...).
 
 Global flags (parsed before positional args):
     -n, --dry-run    print what would run, do not execute network calls
@@ -147,11 +150,11 @@ homeassistant_switch() {
         off) _ha_action=turn_off ;;
     esac
 
-    _url=${3:-${REMOTE_POWER_CONTROL_HOMEASSISTANT_URL-}}
-    _token=${4:-${REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN-}}
+    _url=${REMOTE_POWER_CONTROL_HOMEASSISTANT_URL-}
+    _token=${REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN-}
 
-    : "${_url:?<homeassistant_url> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_URL is not set}"
-    : "${_token:?<homeassistant_access_token> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN is not set}"
+    : "${_url:?REMOTE_POWER_CONTROL_HOMEASSISTANT_URL is not set}"
+    : "${_token:?REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN is not set}"
 
     info "Powering $_action via Home Assistant..."
 
@@ -173,13 +176,13 @@ homeassistant_switch() {
 pikvm_atx() {
     _action=${1:?"<action> not specified"}
     _port=${2-}
-    _url=${3:-${REMOTE_POWER_CONTROL_PIKVM_URL-}}
-    _username=${4:-${REMOTE_POWER_CONTROL_PIKVM_USERNAME-}}
-    _password=${5:-${REMOTE_POWER_CONTROL_PIKVM_PASSWORD-}}
+    _url=${REMOTE_POWER_CONTROL_PIKVM_URL-}
+    _username=${REMOTE_POWER_CONTROL_PIKVM_USERNAME-}
+    _password=${REMOTE_POWER_CONTROL_PIKVM_PASSWORD-}
 
-    : "${_url:?<pikvm_url> parameter or REMOTE_POWER_CONTROL_PIKVM_URL is not set}"
-    : "${_username:?<pikvm_username> parameter or REMOTE_POWER_CONTROL_PIKVM_USERNAME is not set}"
-    : "${_password:?<pikvm_password> parameter or REMOTE_POWER_CONTROL_PIKVM_PASSWORD is not set}"
+    : "${_url:?REMOTE_POWER_CONTROL_PIKVM_URL is not set}"
+    : "${_username:?REMOTE_POWER_CONTROL_PIKVM_USERNAME is not set}"
+    : "${_password:?REMOTE_POWER_CONTROL_PIKVM_PASSWORD is not set}"
 
     if [ -n "$_port" ]; then
         info "Powering $_action via PiKVM Switch (port $_port)..."
@@ -212,11 +215,11 @@ wake_on_lan() {
 ssh_command() {
     _action=${1:?"<action> not specified"}
     _host=${2:?"<host> not specified"}
-    _username=${3:-${REMOTE_POWER_CONTROL_SSH_USERNAME-}}
-    _key_path=${4:-${REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH-}}
+    _username=${REMOTE_POWER_CONTROL_SSH_USERNAME-}
+    _key_path=${REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH-}
 
-    : "${_username:?<ssh_username> parameter or REMOTE_POWER_CONTROL_SSH_USERNAME is not set}"
-    : "${_key_path:?<ssh_private_key_path> parameter or REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH is not set}"
+    : "${_username:?REMOTE_POWER_CONTROL_SSH_USERNAME is not set}"
+    : "${_key_path:?REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH is not set}"
 
     info "Triggering $_action on $_host via SSH..."
 
@@ -357,26 +360,22 @@ fi
 
 # ---- Dispatch ---------------------------------------------------------------
 
-# $4..$7 are the type-specific positional args after host/type/action.
-# Default unset positionals to empty under set -u.
+# Type-specific identifier arg (entity_id, port). Default to empty under set -u.
 arg4=${4-}
-arg5=${5-}
-arg6=${6-}
-arg7=${7-}
 
 case "$type" in
     homeassistant)
-        homeassistant_switch "$action" "$arg4" "$arg5" "$arg6"
+        homeassistant_switch "$action" "$arg4"
         ;;
     pikvm)
-        pikvm_atx "$action" "$arg4" "$arg5" "$arg6" "$arg7"
+        pikvm_atx "$action" "$arg4"
         ;;
     wakeonlan)
         # MAC is at $3 (action was implicit "on")
         wake_on_lan "$3"
         ;;
     ssh)
-        ssh_command "$action" "$host" "$arg4" "$arg5"
+        ssh_command "$action" "$host"
         ;;
 esac
 rc=$?
