@@ -1,138 +1,393 @@
 #!/usr/bin/env sh
 
-# Dependencies
-# - curl
+# remote_power_control: client-side script to power on/off remote hosts via
+# Home Assistant, PiKVM ATX, Wake-on-LAN, or SSH.
+#
+# See SPEC.md for full behavior. See remote/ for the server-side wrapper.
+#
+# Dependencies:
+# - curl >= 7.76 (for --fail-with-body)
+# - ssh
 # - wakeonlan
+# - ping (Linux iputils or BSD/macOS variant)
 
-# Resources
-# - Variable null or empty checking: https://stackoverflow.com/a/13864829
+# ---- Defaults ---------------------------------------------------------------
 
-# Config
-ENV_FILE_PATH=/etc/remote_power_control/env
+: "${ENV_FILE_PATH:=/etc/remote_power_control/env}"
+
+# Globals populated during arg parsing; pre-declared so the EXIT trap can read
+# them safely under set -u.
+host=""
+type=""
+action=""
+dry_run=""
+force=""
+verbose=""
+quiet=""
+
+# ---- Helpers ----------------------------------------------------------------
 
 usage() {
-    echo "remote_power_control <type> <...>"
-    echo "Supported types: homeassistant, pikvm, wakeonlan (only supports 'on' action)"
-    echo "Supported actions: on, off"
-    echo
-    echo "Type usages:"
-    echo "  remote_power_control homeassistant <action> <switch_entity_id> [<homeassistant_base_url>] [<homeassistant_access_token>]"
-    echo "  remote_power_control pikvm <action> [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]"
-    echo "  remote_power_control wakeonlan <mac_address>"
-    echo
-    echo "ENV variables (optionally set in $ENV_FILE_PATH) can also be set instead of optional parameters:"
-    echo "  - REMOTE_POWER_CONTROL_PIKVM_URL"
-    echo "  - REMOTE_POWER_CONTROL_PIKVM_USERNAME"
-    echo "  - REMOTE_POWER_CONTROL_PIKVM_PASSWORD"
-    echo "  - REMOTE_POWER_CONTROL_HOMEASSISTANT_URL"
-    echo "  - REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN"
+    cat <<'USAGE'
+remote_power_control [<flags>] <host> <type> [<action>] [<type-specific args>...]
+
+Types and shapes:
+    <host> homeassistant <action: on|off|status> <switch_entity_id> [<homeassistant_url (with port, e.g. http://ha.local:8123)>] [<homeassistant_access_token>]
+    <host> pikvm         <action: on|off|status> [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]
+    <host> wakeonlan     <mac_address>
+    <host> wakeonlan     status
+    <host> ssh           <action: reboot|shutdown|status> [<ssh_username>] [<ssh_private_key_path>]
+
+Global flags (parsed before positional args):
+    -n, --dry-run    print what would run, do not execute network calls
+    -f, --force      skip the "already on" pre-check
+    -v, --verbose    enable shell tracing (set -x); leaks tokens — debug only
+    -q, --quiet      suppress informational output
+    -h, --help       print this help
+
+Environment variables (optionally set in $ENV_FILE_PATH):
+    REMOTE_POWER_CONTROL_HOMEASSISTANT_URL
+    REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN
+    REMOTE_POWER_CONTROL_PIKVM_URL
+    REMOTE_POWER_CONTROL_PIKVM_USERNAME
+    REMOTE_POWER_CONTROL_PIKVM_PASSWORD
+    REMOTE_POWER_CONTROL_SSH_USERNAME
+    REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH
+    REMOTE_POWER_CONTROL_POST_POWER_ON_MAX_WAIT_IN_SECONDS  (default 180)
+    REMOTE_POWER_CONTROL_POST_REBOOT_MAX_WAIT_IN_SECONDS    (default 180)
+
+Old *_SLEEP_IN_SECONDS env var names are honored as fallback.
+
+Exit codes: 0 success / 1 generic / 2 usage / 3 host unreachable or wait timeout
+            4 auth / 5 API / 6 transient (after retries)
+USAGE
 }
 
-homeassistant_switch() {
-    action=${1:?"<action> not specified"}
-    homeassistant_switch_entity_id=${2:?"<switch_entity_id> not specified"}
+info() {
+    [ -n "$quiet" ] && return 0
+    echo "$@"
+}
 
-    homeassistant_url=${3:-${REMOTE_POWER_CONTROL_HOMEASSISTANT_URL}}
-    homeassistant_access_token=${4:-${REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN}}
-
-    : ${homeassistant_url:?"<homeassistant_url> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_URL is not set"}
-    : ${homeassistant_access_token:?"<homeassistant_access_token> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN is not set"}
-
-    # echo $action
-    # echo $homeassistant_switch_entity_id
-    # echo $homeassistant_url
-    # echo $homeassistant_access_token
-
-    if [ $action = 'on' ]; then
-        homeassistant_action_url_part='turn_on'
-    elif [ $action = 'off' ]; then
-        homeassistant_action_url_part='turn_off'
+host_is_responding() {
+    _host=$1
+    _timeout=${2:-2}
+    if [ "$(uname)" = "Darwin" ]; then
+        # macOS ping -W is milliseconds
+        ping -q -c 1 -W "$((_timeout * 1000))" "$_host" >/dev/null 2>&1
     else
-        echo "$action is not valid."
+        # Linux iputils ping -W is seconds
+        ping -q -c 1 -W "$_timeout" "$_host" >/dev/null 2>&1
     fi
+}
 
-    homeassistant_post_data="{\"entity_id\": \"$homeassistant_switch_entity_id\"}"
+wait_for_host_ready() {
+    _host=$1
+    _max_wait=$2
+    _interval=${3:-5}
+    _start=$(date -u +%s)
+    _deadline=$((_start + _max_wait))
+    info "Waiting up to ${_max_wait}s for $_host to respond..."
+    while [ "$(date -u +%s)" -lt "$_deadline" ]; do
+        if host_is_responding "$_host"; then
+            info "$_host is responding (after $(($(date -u +%s) - _start))s)."
+            return 0
+        fi
+        sleep "$_interval"
+    done
+    echo "$_host did not respond within ${_max_wait}s." >&2
+    return 3
+}
 
-    echo "Powering $action via Home Assistant..."
+wait_for_host_drop() {
+    _host=$1
+    _max_wait=$2
+    _interval=${3:-2}
+    _start=$(date -u +%s)
+    _deadline=$((_start + _max_wait))
+    info "Waiting up to ${_max_wait}s for $_host to stop responding..."
+    while [ "$(date -u +%s)" -lt "$_deadline" ]; do
+        if ! host_is_responding "$_host"; then
+            info "$_host is down (after $(($(date -u +%s) - _start))s)."
+            return 0
+        fi
+        sleep "$_interval"
+    done
+    echo "$_host never stopped responding within ${_max_wait}s; reboot may not have taken." >&2
+    return 3
+}
 
-    /usr/bin/curl \
-    --no-progress-meter \
-    --header "Authorization: Bearer $homeassistant_access_token" \
-    --header "Content-Type application/json" \
-    --data "$homeassistant_post_data" \
-    --request POST \
-    "$homeassistant_url:8123/api/services/switch/$homeassistant_action_url_part"
+run_or_print() {
+    if [ -n "$dry_run" ]; then
+        echo "[dry-run] would run: $*" | sed \
+            -e 's/Bearer [^ ]*/Bearer ***/g' \
+            -e 's/X-KVMD-Passwd: [^ ]*/X-KVMD-Passwd: ***/g'
+        return 0
+    fi
+    "$@"
+}
+
+warn_env_file_perms() {
+    [ -e "$ENV_FILE_PATH" ] || return 0
+    _perms=$(stat -c %a "$ENV_FILE_PATH" 2>/dev/null || stat -f %Lp "$ENV_FILE_PATH" 2>/dev/null || echo "")
+    case "$_perms" in
+        *[2367])
+            echo "warning: $ENV_FILE_PATH is world-readable ($_perms); contains tokens — recommend chmod 600" >&2
+            ;;
+    esac
+}
+
+# ---- Type handlers ----------------------------------------------------------
+
+homeassistant_switch() {
+    _action=${1:?"<action> not specified"}
+    _entity_id=${2:?"<switch_entity_id> not specified"}
+
+    case "$_action" in
+        on)  _ha_action=turn_on ;;
+        off) _ha_action=turn_off ;;
+    esac
+
+    _url=${3:-${REMOTE_POWER_CONTROL_HOMEASSISTANT_URL-}}
+    _token=${4:-${REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN-}}
+
+    : "${_url:?<homeassistant_url> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_URL is not set}"
+    : "${_token:?<homeassistant_access_token> parameter or REMOTE_POWER_CONTROL_HOMEASSISTANT_ACCESS_TOKEN is not set}"
+
+    info "Powering $_action via Home Assistant..."
+
+    run_or_print curl \
+        --no-progress-meter \
+        --connect-timeout 10 \
+        --max-time 30 \
+        --retry 3 \
+        --retry-delay 2 \
+        --retry-max-time 60 \
+        --fail-with-body \
+        --header "Authorization: Bearer $_token" \
+        --header "Content-Type: application/json" \
+        --data "{\"entity_id\": \"$_entity_id\"}" \
+        --request POST \
+        "$_url/api/services/switch/$_ha_action"
 }
 
 pikvm_atx() {
-    action=${1:?action not specified}
+    _action=${1:?"<action> not specified"}
+    _url=${2:-${REMOTE_POWER_CONTROL_PIKVM_URL-}}
+    _username=${3:-${REMOTE_POWER_CONTROL_PIKVM_USERNAME-}}
+    _password=${4:-${REMOTE_POWER_CONTROL_PIKVM_PASSWORD-}}
 
-    pikvm_url=${2:-${REMOTE_POWER_CONTROL_PIKVM_URL}}
-    pikvm_username=${3:-${REMOTE_POWER_CONTROL_PIKVM_USERNAME}}
-    pikvm_password=${4:-${REMOTE_POWER_CONTROL_PIKVM_PASSWORD}}
+    : "${_url:?<pikvm_url> parameter or REMOTE_POWER_CONTROL_PIKVM_URL is not set}"
+    : "${_username:?<pikvm_username> parameter or REMOTE_POWER_CONTROL_PIKVM_USERNAME is not set}"
+    : "${_password:?<pikvm_password> parameter or REMOTE_POWER_CONTROL_PIKVM_PASSWORD is not set}"
 
-    : ${pikvm_url:?"<pikvm_url> parameter or REMOTE_POWER_CONTROL_PIKVM_URL is not set"}
-    : ${pikvm_username:?"<pikvm_username> parameter or REMOTE_POWER_CONTROL_PIKVM_USERNAME is not set"}
-    : ${pikvm_password:?"<pikvm_password> parameter or REMOTE_POWER_CONTROL_PIKVM_PASSWORD is not set"}
+    info "Powering $_action via PiKVM ATX..."
 
-    # echo $action
-    # echo $pikvm_url
-    # echo $pikvm_username
-    # echo $pikvm_password
-
-    if [ $action = 'on' ]; then
-        power_action='on'
-    elif [ $action = 'off' ]; then
-        power_action='off'
-    else
-        echo "$action is not valid."
-    fi
-
-    echo "Powering $action via PiKVM ATX..."
-
-    /usr/bin/curl \
-    --no-progress-meter \
-    --header "X-KVMD-User:$pikvm_username" \
-    --header "X-KVMD-Passwd:$pikvm_password" \
-    --request POST \
-    "$pikvm_url/api/atx/power?action=$power_action"
+    run_or_print curl \
+        --no-progress-meter \
+        --connect-timeout 10 \
+        --max-time 30 \
+        --retry 3 \
+        --retry-delay 2 \
+        --retry-max-time 60 \
+        --fail-with-body \
+        --header "X-KVMD-User: $_username" \
+        --header "X-KVMD-Passwd: $_password" \
+        --request POST \
+        "$_url/api/atx/power?action=$_action"
 }
 
 wake_on_lan() {
-    mac_address=$1
-
-    echo "Powering on via wake-on-LAN..."
-    /usr/bin/wakeonlan $mac_address
+    _mac=${1:?"<mac_address> not specified"}
+    info "Powering on via Wake-on-LAN..."
+    run_or_print wakeonlan "$_mac"
 }
 
-post_power_on_sleep() {
-    sleep_in_seconds=${REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_IN_SECONDS:-"240"} # 4 minutes
+ssh_command() {
+    _action=${1:?"<action> not specified"}
+    _host=${2:?"<host> not specified"}
+    _username=${3:-${REMOTE_POWER_CONTROL_SSH_USERNAME-}}
+    _key_path=${4:-${REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH-}}
 
-    echo "Sleeping for $sleep_in_seconds seconds..."
-    sleep "$sleep_in_seconds"
+    : "${_username:?<ssh_username> parameter or REMOTE_POWER_CONTROL_SSH_USERNAME is not set}"
+    : "${_key_path:?<ssh_private_key_path> parameter or REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH is not set}"
+
+    info "Triggering $_action on $_host via SSH..."
+
+    run_or_print ssh \
+        -o StrictHostKeyChecking=accept-new \
+        -o ConnectTimeout=10 \
+        -o ServerAliveInterval=10 \
+        -o ServerAliveCountMax=3 \
+        -o IdentityFile="$_key_path" \
+        "$_username@$_host" \
+        "$_action"
 }
 
-if [ -e $ENV_FILE_PATH ]; then
-    . $ENV_FILE_PATH
+# ---- Audit log --------------------------------------------------------------
+
+_start_ts=$(date -u +%s)
+_audit_log_path=/var/log/remote_power_control.log
+
+# shellcheck disable=SC2329  # invoked via `trap log_exit EXIT` below
+log_exit() {
+    _rc=$?
+    # Skip audit log for early exits without a host (--help, zero args, unknown flag).
+    [ -z "$host" ] && return 0
+    _end_ts=$(date -u +%s)
+    _duration=$((_end_ts - _start_ts))
+    _ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    _msg="$_ts host=$host type=$type action=$action exit=$_rc duration_s=$_duration"
+    # Subshell so the shell's "permission denied" on >> goes through 2>/dev/null.
+    (echo "$_msg" >> "$_audit_log_path") 2>/dev/null \
+        || logger -t remote_power_control "$_msg" 2>/dev/null \
+        || true
+}
+trap log_exit EXIT
+
+# ---- Flag parsing -----------------------------------------------------------
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n|--dry-run) dry_run=1; shift ;;
+        -f|--force)   force=1; shift ;;
+        -v|--verbose) verbose=1; shift ;;
+        -q|--quiet)   quiet=1; shift ;;
+        -h|--help)    usage; exit 0 ;;
+        --) shift; break ;;
+        -*) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+
+if [ $# -eq 0 ]; then
+    usage
+    exit 0
 fi
 
-type=$1
+# ---- Env file ---------------------------------------------------------------
 
-case $type in
-    "homeassistant")
-        homeassistant_switch $2 $3 $4 $5 # <action>, <entity, url, access_token
+warn_env_file_perms
+if [ -e "$ENV_FILE_PATH" ]; then
+    # shellcheck disable=SC1090
+    . "$ENV_FILE_PATH"
+fi
+
+# ---- Strict mode + tracing --------------------------------------------------
+
+set -u
+[ -n "$verbose" ] && set -x
+
+# ---- Resolve max-wait values (new name with old-name fallback) -------------
+
+power_on_max_wait=${REMOTE_POWER_CONTROL_POST_POWER_ON_MAX_WAIT_IN_SECONDS:-${REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_IN_SECONDS:-180}}
+reboot_max_wait=${REMOTE_POWER_CONTROL_POST_REBOOT_MAX_WAIT_IN_SECONDS:-${REMOTE_POWER_CONTROL_POST_REBOOT_SLEEP_IN_SECONDS:-180}}
+
+# ---- Parse positional args --------------------------------------------------
+
+host=${1:?"<host> not specified"}
+type=${2:?"<type> not specified"}
+
+# wakeonlan is special: action defaults to "on" unless arg3 is "status".
+# Other types: arg3 is the action.
+if [ "$type" = "wakeonlan" ]; then
+    case "${3-}" in
+        status)                 action=status ;;
+        "")                     echo "<mac_address> not specified" >&2; exit 2 ;;
+        on|off|reboot|shutdown) echo "$3 is not a valid mac address (for wakeonlan, expected: <mac> or 'status')" >&2; exit 2 ;;
+        *)                      action=on ;;
+    esac
+else
+    action=${3:?"<action> not specified"}
+fi
+
+# ---- Validate type + action combination ------------------------------------
+
+case "$type" in
+    homeassistant|pikvm)
+        case "$action" in
+            on|off|status) ;;
+            *) echo "$action is not valid for $type (expected: on, off, status)" >&2; exit 2 ;;
+        esac
         ;;
-    "pikvm")
-        pikvm_atx $2 $3 $4 $5 # <action> [<pikvm_url>] [<pikvm_username>] [<pikvm_password>]
+    wakeonlan)
+        case "$action" in
+            on|status) ;;
+            *) echo "$action is not valid for $type (expected: on, status)" >&2; exit 2 ;;
+        esac
         ;;
-    "wakeonlan")
-        wake_on_lan $2
+    ssh)
+        case "$action" in
+            reboot|shutdown|status) ;;
+            *) echo "$action is not valid for $type (expected: reboot, shutdown, status)" >&2; exit 2 ;;
+        esac
         ;;
     *)
-        usage
+        echo "unknown type: $type" >&2
+        usage >&2
+        exit 2
         ;;
 esac
 
-if [ $type = 'wakeonlan' ] || [ $action = 'on' ]; then
-    post_power_on_sleep
+# ---- Status action (type-agnostic) ------------------------------------------
+
+if [ "$action" = "status" ]; then
+    if host_is_responding "$host"; then
+        echo on
+    else
+        echo off
+    fi
+    exit 0
 fi
+
+# ---- Pre-check: skip if host is already on (only for "on" action) ---------
+
+if [ "$action" = "on" ] && [ -z "$force" ]; then
+    if host_is_responding "$host"; then
+        info "$host is already on."
+        exit 0
+    fi
+fi
+
+# ---- Dispatch ---------------------------------------------------------------
+
+# $4..$6 are the type-specific positional args after host/type/action.
+# Default unset positionals to empty under set -u.
+arg4=${4-}
+arg5=${5-}
+arg6=${6-}
+
+case "$type" in
+    homeassistant)
+        homeassistant_switch "$action" "$arg4" "$arg5" "$arg6"
+        ;;
+    pikvm)
+        pikvm_atx "$action" "$arg4" "$arg5" "$arg6"
+        ;;
+    wakeonlan)
+        # MAC is at $3 (action was implicit "on")
+        wake_on_lan "$3"
+        ;;
+    ssh)
+        ssh_command "$action" "$host" "$arg4" "$arg5"
+        ;;
+esac
+rc=$?
+
+# ---- Post-action wait -------------------------------------------------------
+
+if [ "$rc" -eq 0 ] && [ -z "$dry_run" ]; then
+    case "$action" in
+        on)
+            wait_for_host_ready "$host" "$power_on_max_wait" || rc=$?
+            ;;
+        reboot)
+            if wait_for_host_drop "$host" 60; then
+                wait_for_host_ready "$host" "$reboot_max_wait" || rc=$?
+            else
+                rc=3
+            fi
+            ;;
+    esac
+fi
+
+exit "$rc"

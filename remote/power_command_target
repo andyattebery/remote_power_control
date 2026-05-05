@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+
+# power_command_target: server-side SSH ForceCommand wrapper for remote
+# reboot/shutdown. Deployed on hosts that should accept these commands from
+# `remote_power_control <host> ssh ...` (or any other restricted-key client).
+#
+# See remote/README.md for deployment.
+
+case "$SSH_ORIGINAL_COMMAND" in
+    reboot)   sudo /usr/sbin/reboot ;;
+    shutdown) sudo /usr/sbin/shutdown now ;;
+    *)        echo "$SSH_ORIGINAL_COMMAND not supported" >&2; exit 2 ;;
+esac
