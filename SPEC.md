@@ -36,6 +36,7 @@ Global flags (parsed before positional args):
 | `-f`, `--force`       | Skip the "already on" pre-check. |
 | `-v`, `--verbose`     | Enable shell tracing (`set -x`). Tokens may leak — debug only. |
 | `-q`, `--quiet`       | Suppress informational stdout. Errors still go to stderr. |
+| `--profile NAME`      | Source `<NAME>.env` from `$REMOTE_POWER_CONTROL_ENV_DIR` (default `/etc/remote_power_control`) on top of the base env file. Profile values override base values. Exits 2 if the file is missing or unreadable. |
 | `-h`, `--help`        | Print usage and exit 0. |
 
 ## Types and arguments
@@ -71,9 +72,23 @@ identical between the two.
 
 ## Environment variables
 
-Optionally set in `$ENV_FILE_PATH` (default `/etc/remote_power_control/env`,
-overridable via env). The file is sourced if it exists; the script warns to
-stderr if it is world-readable.
+Optionally set in `$ENV_FILE_PATH` (defaults to `$REMOTE_POWER_CONTROL_ENV_DIR/env`,
+i.e. `/etc/remote_power_control/env`; both are overridable via env). The
+file is sourced if it exists; the script warns to stderr if it is
+world-readable.
+
+When `--profile NAME` is given, `<NAME>.env` from
+`$REMOTE_POWER_CONTROL_ENV_DIR` (default `/etc/remote_power_control`) is
+sourced *after* the base file, so any variables it sets override the base.
+Profile files get the same world-readable warning as the base file. Use this
+to address multiple pikvm or Home Assistant endpoints from a single install
+without changing positional args. With `-v`, each sourced file's path is
+logged to stderr as `sourced: <path>` (path only — no contents).
+
+Setting `REMOTE_POWER_CONTROL_ENV_DIR` moves both the default base file and
+the profile directory in one go. `ENV_FILE_PATH` can still be set
+independently to point the base file somewhere else (e.g. inline for a
+one-off invocation) without affecting profile lookup.
 
 | Variable | Used for |
 |---|---|
@@ -86,6 +101,7 @@ stderr if it is world-readable.
 | `REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH` | Default SSH key for `ssh` type |
 | `REMOTE_POWER_CONTROL_POST_POWER_ON_MAX_WAIT_IN_SECONDS` | Max wait after a power-on. Default `180`. |
 | `REMOTE_POWER_CONTROL_POST_REBOOT_MAX_WAIT_IN_SECONDS`   | Max wait after `ssh reboot`. Default `180`. |
+| `REMOTE_POWER_CONTROL_ENV_DIR`                           | Directory holding the base `env` file and `<NAME>.env` profile files. Default `/etc/remote_power_control`. |
 
 **Backward compatibility.** The older names
 `REMOTE_POWER_CONTROL_POST_POWER_ON_SLEEP_IN_SECONDS` and

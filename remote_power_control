@@ -13,7 +13,8 @@
 
 # ---- Defaults ---------------------------------------------------------------
 
-: "${ENV_FILE_PATH:=/etc/remote_power_control/env}"
+: "${REMOTE_POWER_CONTROL_ENV_DIR:=/etc/remote_power_control}"
+: "${ENV_FILE_PATH:=${REMOTE_POWER_CONTROL_ENV_DIR}/env}"
 
 # Globals populated during arg parsing; pre-declared so the EXIT trap can read
 # them safely under set -u.
@@ -24,6 +25,7 @@ dry_run=""
 force=""
 verbose=""
 quiet=""
+opt_profile=""
 
 # ---- Helpers ----------------------------------------------------------------
 
@@ -46,6 +48,10 @@ Global flags (parsed before positional args):
     -f, --force      skip the "already on" pre-check
     -v, --verbose    enable shell tracing (set -x); leaks tokens — debug only
     -q, --quiet      suppress informational output
+    --profile NAME   source <NAME>.env from $REMOTE_POWER_CONTROL_ENV_DIR
+                     (default /etc/remote_power_control) on top of the base env
+                     file; profile values override base. Use to target multiple
+                     pikvm or Home Assistant endpoints from one install.
     -h, --help       print this help
 
 Environment variables (optionally set in $ENV_FILE_PATH):
@@ -58,6 +64,7 @@ Environment variables (optionally set in $ENV_FILE_PATH):
     REMOTE_POWER_CONTROL_SSH_PRIVATE_KEY_PATH
     REMOTE_POWER_CONTROL_POST_POWER_ON_MAX_WAIT_IN_SECONDS  (default 180)
     REMOTE_POWER_CONTROL_POST_REBOOT_MAX_WAIT_IN_SECONDS    (default 180)
+    REMOTE_POWER_CONTROL_ENV_DIR                            (default /etc/remote_power_control)
 
 Old *_SLEEP_IN_SECONDS env var names are honored as fallback.
 
@@ -130,11 +137,12 @@ run_or_print() {
 }
 
 warn_env_file_perms() {
-    [ -e "$ENV_FILE_PATH" ] || return 0
-    _perms=$(stat -c %a "$ENV_FILE_PATH" 2>/dev/null || stat -f %Lp "$ENV_FILE_PATH" 2>/dev/null || echo "")
+    _path=$1
+    [ -e "$_path" ] || return 0
+    _perms=$(stat -c %a "$_path" 2>/dev/null || stat -f %Lp "$_path" 2>/dev/null || echo "")
     case "$_perms" in
         *[2367])
-            echo "warning: $ENV_FILE_PATH is world-readable ($_perms); contains tokens — recommend chmod 600" >&2
+            echo "warning: $_path is world-readable ($_perms); contains tokens — recommend chmod 600" >&2
             ;;
     esac
 }
@@ -263,6 +271,11 @@ while [ $# -gt 0 ]; do
         -v|--verbose) verbose=1; shift ;;
         -q|--quiet)   quiet=1; shift ;;
         -h|--help)    usage; exit 0 ;;
+        --profile)
+            [ $# -ge 2 ] || { echo "--profile requires a name" >&2; exit 2; }
+            opt_profile=$2
+            shift 2
+            ;;
         --) shift; break ;;
         -*) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;
         *) break ;;
@@ -274,12 +287,25 @@ if [ $# -eq 0 ]; then
     exit 0
 fi
 
-# ---- Env file ---------------------------------------------------------------
+# ---- Env file(s) ------------------------------------------------------------
 
-warn_env_file_perms
+warn_env_file_perms "$ENV_FILE_PATH"
 if [ -e "$ENV_FILE_PATH" ]; then
+    [ -n "$verbose" ] && echo "sourced: $ENV_FILE_PATH" >&2
     # shellcheck disable=SC1090
     . "$ENV_FILE_PATH"
+fi
+
+if [ -n "$opt_profile" ]; then
+    profile_path="${REMOTE_POWER_CONTROL_ENV_DIR}/${opt_profile}.env"
+    if [ ! -r "$profile_path" ]; then
+        echo "profile env not found or not readable: $profile_path" >&2
+        exit 2
+    fi
+    warn_env_file_perms "$profile_path"
+    [ -n "$verbose" ] && echo "sourced: $profile_path" >&2
+    # shellcheck disable=SC1090
+    . "$profile_path"
 fi
 
 # ---- Strict mode + tracing --------------------------------------------------

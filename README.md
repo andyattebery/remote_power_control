@@ -55,6 +55,14 @@ inline (`FOO=bar remote_power_control ...`) or in
 which is sourced if it exists. The file should be `chmod 600` since it
 holds API tokens — the script warns if it's world-readable.
 
+To address multiple pikvm or Home Assistant endpoints from a single
+install, drop additional `<NAME>.env` files alongside the base file and
+pass `--profile NAME`. The profile is sourced on top of the base, so
+profile values override base values. The env directory defaults to
+`/etc/remote_power_control` (holding both the base `env` file and the
+`<NAME>.env` profile files) and can be moved with
+`REMOTE_POWER_CONTROL_ENV_DIR`.
+
 | Variable | Purpose |
 |---|---|
 | `REMOTE_POWER_CONTROL_HOMEASSISTANT_URL` | HA base URL with scheme and port (e.g. `http://ha.local:8123`) |
